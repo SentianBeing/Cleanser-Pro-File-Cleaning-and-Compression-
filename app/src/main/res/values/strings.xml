@@ -1,0 +1,16 @@
+<resources>
+    <string name="app_name">Roomy</string>
+    <string name="tagline">Delete what you don\'t need. Shrink what you keep.</string>
+    <string name="review_files">Review files</string>
+    <string name="photos">Photos</string>
+    <string name="videos">Videos</string>
+    <string name="large_files">Large files</string>
+    <string name="bulk_compress">Bulk compress</string>
+    <string name="junk_cleanup">Junk cleanup</string>
+    <string name="ram_info">RAM</string>
+    <string name="keep">Keep</string>
+    <string name="delete">Delete</string>
+    <string name="compress">Compress</string>
+    <string name="duplicates">Exact duplicates</string>
+    <string name="system_storage">System Storage Settings</string>
+</resources>

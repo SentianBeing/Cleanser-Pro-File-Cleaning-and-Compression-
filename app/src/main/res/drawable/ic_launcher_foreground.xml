@@ -1,0 +1,41 @@
+<?xml version="1.0" encoding="utf-8"?>
+<vector xmlns:android="http://schemas.android.com/apk/res/android"
+    android:width="108dp"
+    android:height="108dp"
+    android:viewportWidth="108"
+    android:viewportHeight="108">
+    <!-- Phone outline -->
+    <path
+        android:fillColor="#00000000"
+        android:strokeColor="#FFFFFF"
+        android:strokeWidth="3.5"
+        android:strokeLineCap="round"
+        android:strokeLineJoin="round"
+        android:pathData="M42,27 h24 c3.3,0 6,2.7 6,6 v42 c0,3.3 -2.7,6 -6,6 h-24 c-3.3,0 -6,-2.7 -6,-6 v-42 c0,-3.3 2.7,-6 6,-6 z" />
+    <!-- Phone home indicator bar -->
+    <path
+        android:fillColor="#00000000"
+        android:strokeColor="#FFFFFF"
+        android:strokeWidth="2.5"
+        android:strokeLineCap="round"
+        android:pathData="M49,74 h10" />
+    <!-- Dynamic sweep cleaning crescent / wave inside phone -->
+    <path
+        android:fillColor="#00F5D4"
+        android:pathData="M42,48 C48,42 60,42 66,48 C63,55 52,60 42,57 Z" />
+    <!-- Dynamic high-speed spark cleaning curve -->
+    <path
+        android:fillColor="#00000000"
+        android:strokeColor="#00F5D4"
+        android:strokeWidth="3.5"
+        android:strokeLineCap="round"
+        android:pathData="M27,56 C26,40 40,24 58,24" />
+    <!-- Top-Right Sparkle -->
+    <path
+        android:fillColor="#00F5D4"
+        android:pathData="M70,22 Q70,29 77,29 Q70,29 70,36 Q70,29 63,29 Q70,29 70,22 Z" />
+    <!-- Small accent sparkle -->
+    <path
+        android:fillColor="#FFFFFF"
+        android:pathData="M34,36 Q34,40 38,40 Q34,40 34,44 Q34,40 30,40 Q34,40 34,36 Z" />
+</vector>

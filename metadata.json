@@ -1,0 +1,6 @@
+{
+  "name": "Roomy",
+  "description": "Delete what you don't need. Shrink what you keep. Review-first storage cleaner and on-device compressor.",
+  "requestFramePermissions": [],
+  "majorCapabilities": ["MAJOR_CAPABILITY_SERVER_SIDE_GEMINI_API"]
+}

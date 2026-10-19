@@ -1,0 +1,6 @@
+{
+  "summary": "Production-grade implementation plan to transition Roomy from dummy placeholders to true real-world Android platform integrations: real MediaStore ContentResolver queries, Android 13+ READ_MEDIA permissions with Photo Picker fallback, native OS MediaStore.createDeleteRequest system consent dialog, and zero synthetic dummy files.",
+  "updatedAt": "2026-10-19T11:37:43.373410715Z",
+  "requestFeedback": true,
+  "userFacing": true
+}
