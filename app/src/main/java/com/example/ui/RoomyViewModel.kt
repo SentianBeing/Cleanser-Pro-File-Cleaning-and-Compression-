@@ -1,6 +1,11 @@
 package com.example.ui
 
 import android.app.Application
+import android.content.IntentSender
+import android.content.pm.PackageManager
+import android.net.Uri
+import android.os.Build
+import androidx.core.content.ContextCompat
 import androidx.lifecycle.AndroidViewModel
 import androidx.lifecycle.viewModelScope
 import com.example.data.RoomyRepository
@@ -16,18 +21,6 @@ import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.StateFlow
 import kotlinx.coroutines.flow.asStateFlow
 import kotlinx.coroutines.launch
-
-enum class RoomyScreen {
-    HOME,
-    REVIEW,
-    PHOTOS,
-    VIDEOS,
-    LARGE_FILES,
-    DUPLICATES,
-    BULK_COMPRESS,
-    JUNK,
-    RAM
-}
 
 class RoomyViewModel(application: Application) : AndroidViewModel(application) {
 
@@ -60,6 +53,9 @@ class RoomyViewModel(application: Application) : AndroidViewModel(application) {
     private val _scanProgressText = MutableStateFlow("")
     val scanProgressText: StateFlow<String> = _scanProgressText.asStateFlow()
 
+    private val _hasMediaPermission = MutableStateFlow(checkInitialPermission())
+    val hasMediaPermission: StateFlow<Boolean> = _hasMediaPermission.asStateFlow()
+
     // Compression State
     private val _compressionPreset = MutableStateFlow(CompressionPreset.BALANCED)
     val compressionPreset: StateFlow<CompressionPreset> = _compressionPreset.asStateFlow()
@@ -75,6 +71,41 @@ class RoomyViewModel(application: Application) : AndroidViewModel(application) {
 
     init {
         refreshMetrics()
+        scanInventory()
+    }
+
+    private fun checkInitialPermission(): Boolean {
+        val app = getApplication<Application>()
+        return if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.TIRAMISU) {
+            val img = ContextCompat.checkSelfPermission(app, android.Manifest.permission.READ_MEDIA_IMAGES)
+            val vid = ContextCompat.checkSelfPermission(app, android.Manifest.permission.READ_MEDIA_VIDEO)
+            img == PackageManager.PERMISSION_GRANTED || vid == PackageManager.PERMISSION_GRANTED
+        } else {
+            val ext = ContextCompat.checkSelfPermission(app, android.Manifest.permission.READ_EXTERNAL_STORAGE)
+            ext == PackageManager.PERMISSION_GRANTED
+        }
+    }
+
+    fun updatePermissionState(granted: Boolean) {
+        _hasMediaPermission.value = granted
+        if (granted) {
+            scanInventory()
+        }
+    }
+
+    fun checkPermissionsAndRefresh() {
+        val granted = checkInitialPermission()
+        if (granted != _hasMediaPermission.value) {
+            _hasMediaPermission.value = granted
+            if (granted) {
+                scanInventory()
+            }
+        }
+    }
+
+    fun addPickedMediaUris(uris: List<Uri>) {
+        if (uris.isEmpty()) return
+        repository.addPickerUris(uris)
         scanInventory()
     }
 
@@ -102,16 +133,20 @@ class RoomyViewModel(application: Application) : AndroidViewModel(application) {
     fun scanInventory() {
         viewModelScope.launch {
             _isScanning.value = true
-            val media = repository.scanAccessibleMedia { _, text ->
+            val media = repository.scanRealMedia { _, text ->
                 _scanProgressText.value = text
             }
             _allMedia.value = media
 
-            _scanProgressText.value = "Detecting exact duplicates (SHA-256)…"
-            val duplicates = repository.detectExactDuplicates(media) { _, text ->
-                _scanProgressText.value = text
+            if (media.isNotEmpty()) {
+                _scanProgressText.value = "Detecting exact duplicates (SHA-256)…"
+                val duplicates = repository.detectExactDuplicates(media) { _, text ->
+                    _scanProgressText.value = text
+                }
+                _duplicateGroups.value = duplicates
+            } else {
+                _duplicateGroups.value = emptyList()
             }
-            _duplicateGroups.value = duplicates
 
             refreshJunk()
             refreshMetrics()
@@ -145,24 +180,22 @@ class RoomyViewModel(application: Application) : AndroidViewModel(application) {
         _allMedia.value = updated
     }
 
-    fun deleteItem(item: MediaFileItem) {
-        viewModelScope.launch {
-            repository.deleteFiles(listOf(item))
-            _allMedia.value = _allMedia.value.filter { it.id != item.id }
-            refreshMetrics()
-            // Also refresh duplicates
-            _duplicateGroups.value = repository.detectExactDuplicates(_allMedia.value) { _, _ -> }
-        }
+    /**
+     * Builds official Android MediaStore system deletion request for modern Android
+     */
+    fun createDeleteIntentSender(items: List<MediaFileItem>): IntentSender? {
+        val uris = items.map { it.uri }
+        return repository.createSystemDeleteIntent(uris)
     }
 
-    fun deleteBatch(items: List<MediaFileItem>) {
-        if (items.isEmpty()) return
+    /**
+     * Executed when direct deletion is appropriate or after OS permission approval
+     */
+    fun onDeletionCompleted(items: List<MediaFileItem>) {
         viewModelScope.launch {
-            repository.deleteFiles(items)
-            val deletedIds = items.map { it.id }.toSet()
-            _allMedia.value = _allMedia.value.filter { !deletedIds.contains(it.id) }
-            refreshMetrics()
-            _duplicateGroups.value = repository.detectExactDuplicates(_allMedia.value) { _, _ -> }
+            val uris = items.map { it.uri }
+            repository.deleteDirect(uris)
+            scanInventory()
         }
     }
 
@@ -183,22 +216,17 @@ class RoomyViewModel(application: Application) : AndroidViewModel(application) {
         _duplicateGroups.value = updated
     }
 
-    fun deleteSelectedDuplicates() {
-        val selectedFiles = _duplicateGroups.value.flatMap { group ->
-            // Prevent deleting ALL files in a group per PRD
+    fun getSelectedDuplicates(): List<MediaFileItem> {
+        return _duplicateGroups.value.flatMap { group ->
             val keepers = group.files.filter { !it.isSelectedForDelete }
             if (keepers.isNotEmpty()) {
                 group.files.filter { it.isSelectedForDelete }
             } else emptyList()
         }
-
-        if (selectedFiles.isNotEmpty()) {
-            deleteBatch(selectedFiles)
-        }
     }
 
     // -------------------------------------------------------------
-    // Large Files Threshold & Selection
+    // Large Files Threshold
     // -------------------------------------------------------------
 
     fun setLargeFileThresholdMb(mb: Int) {

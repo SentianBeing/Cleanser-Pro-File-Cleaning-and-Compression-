@@ -158,25 +158,15 @@ fun PhotosScreen(
                                     .border(1.dp, RoomyDivider, RoundedCornerShape(12.dp)),
                                 contentAlignment = Alignment.Center
                             ) {
-                                val f = File(photo.path)
-                                if (f.exists()) {
-                                    AsyncImage(
-                                        model = ImageRequest.Builder(context)
-                                            .data(f)
-                                            .crossfade(true)
-                                            .build(),
-                                        contentDescription = photo.name,
-                                        contentScale = ContentScale.Crop,
-                                        modifier = Modifier.fillMaxWidth()
-                                    )
-                                } else {
-                                    Icon(
-                                        imageVector = Icons.Default.Image,
-                                        contentDescription = null,
-                                        tint = RoomyLavender,
-                                        modifier = Modifier.size(24.dp)
-                                    )
-                                }
+                                AsyncImage(
+                                    model = ImageRequest.Builder(context)
+                                        .data(photo.uri)
+                                        .crossfade(true)
+                                        .build(),
+                                    contentDescription = photo.name,
+                                    contentScale = ContentScale.Crop,
+                                    modifier = Modifier.fillMaxSize()
+                                )
                             }
 
                             Spacer(modifier = Modifier.width(12.dp))

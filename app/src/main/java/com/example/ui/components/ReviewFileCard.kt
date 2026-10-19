@@ -7,6 +7,7 @@ import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.Row
 import androidx.compose.foundation.layout.Spacer
+import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.height
 import androidx.compose.foundation.layout.padding
@@ -87,16 +88,15 @@ fun ReviewFileCard(
                         .border(1.dp, RoomyDivider, RoundedCornerShape(12.dp)),
                     contentAlignment = Alignment.Center
                 ) {
-                    val file = File(item.path)
-                    if (file.exists() && (item.mimeType.startsWith("image/") || item.mimeType.startsWith("video/"))) {
+                    if (item.mimeType.startsWith("image/") || item.mimeType.startsWith("video/")) {
                         AsyncImage(
                             model = ImageRequest.Builder(context)
-                                .data(file)
+                                .data(item.uri)
                                 .crossfade(true)
                                 .build(),
                             contentDescription = item.name,
                             contentScale = ContentScale.Crop,
-                            modifier = Modifier.fillMaxWidth()
+                            modifier = Modifier.fillMaxSize()
                         )
                     } else {
                         Icon(

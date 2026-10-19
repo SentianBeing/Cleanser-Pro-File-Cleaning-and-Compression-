@@ -1,6 +1,7 @@
 package com.example.ui.screens
 
 import androidx.compose.foundation.background
+import androidx.compose.foundation.border
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.Column
@@ -17,20 +18,26 @@ import androidx.compose.foundation.lazy.LazyColumn
 import androidx.compose.foundation.shape.CircleShape
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.material.icons.Icons
+import androidx.compose.material.icons.filled.AddPhotoAlternate
 import androidx.compose.material.icons.filled.AutoAwesome
+import androidx.compose.material.icons.filled.CheckCircle
 import androidx.compose.material.icons.filled.Compress
 import androidx.compose.material.icons.filled.CopyAll
 import androidx.compose.material.icons.filled.DeleteSweep
 import androidx.compose.material.icons.filled.FolderZip
 import androidx.compose.material.icons.filled.Image
+import androidx.compose.material.icons.filled.Info
+import androidx.compose.material.icons.filled.Lock
 import androidx.compose.material.icons.filled.Memory
 import androidx.compose.material.icons.filled.Refresh
+import androidx.compose.material.icons.filled.Security
 import androidx.compose.material.icons.filled.Videocam
 import androidx.compose.material3.Button
 import androidx.compose.material3.ButtonDefaults
 import androidx.compose.material3.HorizontalDivider
 import androidx.compose.material3.Icon
 import androidx.compose.material3.IconButton
+import androidx.compose.material3.OutlinedButton
 import androidx.compose.material3.Text
 import androidx.compose.runtime.Composable
 import androidx.compose.ui.Alignment
@@ -39,6 +46,7 @@ import androidx.compose.ui.draw.clip
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.platform.testTag
 import androidx.compose.ui.text.font.FontWeight
+import androidx.compose.ui.text.style.TextAlign
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 import com.example.model.DuplicateGroup
@@ -57,6 +65,7 @@ import com.example.ui.theme.RoomyCoralLight
 import com.example.ui.theme.RoomyDelete
 import com.example.ui.theme.RoomyDeleteLight
 import com.example.ui.theme.RoomyDivider
+import com.example.ui.theme.RoomyKeep
 import com.example.ui.theme.RoomyLavender
 import com.example.ui.theme.RoomyLavenderLight
 import com.example.ui.theme.RoomyTextMain
@@ -68,6 +77,9 @@ fun HomeScreen(
     ramStats: RamStats,
     mediaList: List<MediaFileItem>,
     duplicateGroups: List<DuplicateGroup>,
+    hasMediaPermission: Boolean,
+    onRequestPermission: () -> Unit,
+    onLaunchPhotoPicker: () -> Unit,
     onNavigate: (RoomyScreen) -> Unit,
     onRescan: () -> Unit,
     modifier: Modifier = Modifier
@@ -130,7 +142,7 @@ fun HomeScreen(
             }
         }
 
-        // Compact Storage Ring
+        // Compact Real Storage Ring
         item {
             SmallStorageRing(
                 usedPercent = storageMetrics.usedStoragePercent,
@@ -140,10 +152,85 @@ fun HomeScreen(
             )
         }
 
+        // Real Permission Banner if permission not yet granted
+        if (!hasMediaPermission) {
+            item {
+                Box(
+                    modifier = Modifier
+                        .fillMaxWidth()
+                        .clip(RoundedCornerShape(18.dp))
+                        .background(RoomyCardBg)
+                        .border(1.dp, RoomyDivider, RoundedCornerShape(18.dp))
+                        .padding(16.dp)
+                ) {
+                    Column {
+                        Row(verticalAlignment = Alignment.CenterVertically) {
+                            Box(
+                                modifier = Modifier
+                                    .size(36.dp)
+                                    .clip(CircleShape)
+                                    .background(RoomyCoralLight),
+                                contentAlignment = Alignment.Center
+                            ) {
+                                Icon(
+                                    imageVector = Icons.Default.Security,
+                                    contentDescription = null,
+                                    tint = RoomyCoral,
+                                    modifier = Modifier.size(20.dp)
+                                )
+                            }
+                            Spacer(modifier = Modifier.width(12.dp))
+                            Column {
+                                Text(
+                                    text = "Gallery Permission Needed",
+                                    fontSize = 14.sp,
+                                    fontWeight = FontWeight.Bold,
+                                    color = RoomyTextMain
+                                )
+                                Text(
+                                    text = "Grant media access to scan photos and videos on your phone, or pick specific files manually.",
+                                    fontSize = 12.sp,
+                                    color = RoomyTextSecondary
+                                )
+                            }
+                        }
+
+                        Spacer(modifier = Modifier.height(14.dp))
+
+                        Row(
+                            modifier = Modifier.fillMaxWidth(),
+                            horizontalArrangement = Arrangement.spacedBy(10.dp)
+                        ) {
+                            Button(
+                                onClick = onRequestPermission,
+                                modifier = Modifier.weight(1.2f).height(42.dp),
+                                shape = RoundedCornerShape(12.dp),
+                                colors = ButtonDefaults.buttonColors(
+                                    containerColor = RoomyCoral,
+                                    contentColor = RoomyTextMain
+                                )
+                            ) {
+                                Text("Grant Permission", fontSize = 12.sp, fontWeight = FontWeight.Bold)
+                            }
+
+                            OutlinedButton(
+                                onClick = onLaunchPhotoPicker,
+                                modifier = Modifier.weight(1f).height(42.dp),
+                                shape = RoundedCornerShape(12.dp)
+                            ) {
+                                Text("Select Files", fontSize = 12.sp, color = RoomyTextMain)
+                            }
+                        }
+                    }
+                }
+            }
+        }
+
         // Primary Hero Action: "Review files"
         item {
             Button(
                 onClick = { onNavigate(RoomyScreen.REVIEW) },
+                enabled = mediaList.isNotEmpty(),
                 modifier = Modifier
                     .fillMaxWidth()
                     .height(56.dp)
@@ -161,10 +248,57 @@ fun HomeScreen(
                 )
                 Spacer(modifier = Modifier.width(10.dp))
                 Text(
-                    text = "Review files ($unreviewedCount ready)",
+                    text = if (mediaList.isNotEmpty()) "Review files ($unreviewedCount ready)" else "Review files (0 found)",
                     fontSize = 16.sp,
                     fontWeight = FontWeight.Bold
                 )
+            }
+        }
+
+        // Honest Diagnostic Scan Card when 0 items found in gallery (per user request)
+        if (mediaList.isEmpty()) {
+            item {
+                Box(
+                    modifier = Modifier
+                        .fillMaxWidth()
+                        .clip(RoundedCornerShape(18.dp))
+                        .background(RoomyCardBg)
+                        .border(1.dp, RoomyDivider, RoundedCornerShape(18.dp))
+                        .padding(18.dp)
+                ) {
+                    Column(horizontalAlignment = Alignment.CenterHorizontally) {
+                        Icon(
+                            imageVector = Icons.Default.Info,
+                            contentDescription = null,
+                            tint = RoomyLavender,
+                            modifier = Modifier.size(36.dp)
+                        )
+                        Spacer(modifier = Modifier.height(8.dp))
+                        Text(
+                            text = "Diagnostic Scan: 0 Items Found",
+                            fontSize = 15.sp,
+                            fontWeight = FontWeight.Bold,
+                            color = RoomyTextMain
+                        )
+                        Spacer(modifier = Modifier.height(4.dp))
+                        Text(
+                            text = "No images or videos currently found in the Android MediaStore. You can select files manually using the Photo Picker.",
+                            fontSize = 12.sp,
+                            color = RoomyTextSecondary,
+                            textAlign = TextAlign.Center
+                        )
+                        Spacer(modifier = Modifier.height(14.dp))
+                        Button(
+                            onClick = onLaunchPhotoPicker,
+                            colors = ButtonDefaults.buttonColors(containerColor = RoomyTextMain, contentColor = Color.White),
+                            shape = RoundedCornerShape(12.dp)
+                        ) {
+                            Icon(Icons.Default.AddPhotoAlternate, contentDescription = null, modifier = Modifier.size(16.dp))
+                            Spacer(modifier = Modifier.width(6.dp))
+                            Text("Pick Media from Device", fontSize = 12.sp, fontWeight = FontWeight.SemiBold)
+                        }
+                    }
+                }
             }
         }
 
