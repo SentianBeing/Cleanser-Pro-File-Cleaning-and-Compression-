@@ -22,6 +22,6 @@ dependencyResolutionManagement {
   }
 }
 
-rootProject.name = "Roomy"
+rootProject.name = "Cleanser"
 
 include(":app")

@@ -1,6 +1,9 @@
 <resources>
-    <string name="app_name">Roomy</string>
-    <string name="tagline">Delete what you don\'t need. Shrink what you keep.</string>
+    <string name="app_name">Cleanser: Clean &amp; Compress</string>
+    <!-- Short name under the home screen icon, where the full name would be cut off -->
+    <string name="launcher_name">Cleanser</string>
+    <string name="tagline">Clear the clutter. Shrink what you keep.</string>
+    <string name="on_device_promise">Processed on your phone. No media is ever uploaded.</string>
     <string name="review_files">Review files</string>
     <string name="photos">Photos</string>
     <string name="videos">Videos</string>

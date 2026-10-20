@@ -1,6 +1,6 @@
 {
-  "name": "Roomy",
-  "description": "Delete what you don't need. Shrink what you keep. Review-first storage cleaner and on-device compressor.",
+  "name": "Cleanser: Clean & Compress",
+  "description": "Clear the clutter. Shrink what you keep. Find duplicate photos, unwanted videos and large files to review and delete, and compress photos and videos in bulk. Everything is processed on your phone, with no media uploads.",
   "requestFramePermissions": [],
-  "majorCapabilities": ["MAJOR_CAPABILITY_SERVER_SIDE_GEMINI_API"]
+  "majorCapabilities": []
 }
