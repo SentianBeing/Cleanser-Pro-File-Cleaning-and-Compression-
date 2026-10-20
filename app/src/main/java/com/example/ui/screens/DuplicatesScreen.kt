@@ -50,7 +50,9 @@ import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 import com.example.model.DuplicateGroup
+import com.example.model.MediaFileItem
 import com.example.model.StorageMetrics
+import com.example.ui.components.MediaThumbnail
 import com.example.ui.theme.RoomyBackground
 import com.example.ui.theme.RoomyCardBg
 import com.example.ui.theme.RoomyCoral
@@ -69,12 +71,15 @@ fun DuplicatesScreen(
     onToggleSelection: (String, String) -> Unit,
     onDeleteSelected: () -> Unit,
     onBack: () -> Unit,
-    modifier: Modifier = Modifier
+    modifier: Modifier = Modifier,
+    isChecking: Boolean = false,
+    onSelectExtraCopies: () -> Unit = {},
+    onClearSelection: () -> Unit = {},
+    onOpen: (List<MediaFileItem>, MediaFileItem) -> Unit = { _, _ -> }
 ) {
-    var showConfirmDialog by remember { mutableStateOf(false) }
-
     val totalRemovableBytes = groups.sumOf { it.removableSize }
-    val totalSelectedCount = groups.flatMap { it.files }.count { it.isSelectedForDelete }
+    val totalSelectedCount = groups.sumOf { g -> if (g.removableSize > 0) g.files.count { it.isSelectedForDelete } else 0 }
+    val anySelected = groups.any { g -> g.files.any { it.isSelectedForDelete } }
 
     Column(
         modifier = modifier
@@ -103,7 +108,7 @@ fun DuplicatesScreen(
             Spacer(modifier = Modifier.weight(1f))
 
             Text(
-                text = "Exact duplicates",
+                text = "Duplicates",
                 fontSize = 18.sp,
                 fontWeight = FontWeight.Bold,
                 color = RoomyTextMain
@@ -121,17 +126,21 @@ fun DuplicatesScreen(
             verticalAlignment = Alignment.CenterVertically
         ) {
             Text(
-                text = "Matched by size + streamed SHA-256",
+                text = if (isChecking) "Checking files…" else (if (groups.size == 1) "1 set of exact copies" else "${groups.size} sets of exact copies"),
                 fontSize = 12.sp,
-                color = RoomyTextSecondary
+                color = RoomyTextSecondary,
+                modifier = Modifier.weight(1f)
             )
-            Spacer(modifier = Modifier.weight(1f))
-            Text(
-                text = "${groups.size} groups",
-                fontSize = 12.sp,
-                fontWeight = FontWeight.SemiBold,
-                color = RoomyTextMain
-            )
+            if (groups.isNotEmpty()) {
+                TextButton(onClick = if (anySelected) onClearSelection else onSelectExtraCopies) {
+                    Text(
+                        text = if (anySelected) "Clear selection" else "Select extra copies",
+                        color = RoomyLavender,
+                        fontWeight = FontWeight.SemiBold,
+                        fontSize = 13.sp
+                    )
+                }
+            }
         }
 
         if (groups.isEmpty()) {
@@ -151,14 +160,15 @@ fun DuplicatesScreen(
                     )
                     Spacer(modifier = Modifier.height(12.dp))
                     Text(
-                        text = "No Exact Duplicates Found",
+                        text = if (isChecking) "Still checking…" else "No Duplicates Found",
                         fontSize = 18.sp,
                         fontWeight = FontWeight.Bold,
                         color = RoomyTextMain
                     )
                     Spacer(modifier = Modifier.height(4.dp))
                     Text(
-                        text = "Every accessible media file has a distinct SHA-256 checksum.",
+                        text = if (isChecking) "Duplicates will appear here when the check finishes."
+                        else "No exact copies among the photos and videos Cleanser can see.",
                         fontSize = 13.sp,
                         color = RoomyTextSecondary,
                         textAlign = TextAlign.Center
@@ -257,7 +267,15 @@ fun DuplicatesScreen(
                                         )
                                     )
 
-                                    Spacer(modifier = Modifier.width(4.dp))
+                                    MediaThumbnail(
+                                        item = file,
+                                        modifier = Modifier
+                                            .size(44.dp)
+                                            .clip(RoundedCornerShape(8.dp))
+                                            .clickable { onOpen(group.files, file) }
+                                    )
+
+                                    Spacer(modifier = Modifier.width(10.dp))
 
                                     Column(modifier = Modifier.weight(1f)) {
                                         Text(
@@ -269,9 +287,11 @@ fun DuplicatesScreen(
                                             color = RoomyTextMain
                                         )
                                         Text(
-                                            text = "${file.formattedSize} · Added ${file.formattedDate}",
+                                            text = "${file.formattedDate} · ${file.folder.trimEnd('/').ifEmpty { "Unknown folder" }}",
                                             fontSize = 11.sp,
-                                            color = RoomyTextSecondary
+                                            color = RoomyTextSecondary,
+                                            maxLines = 1,
+                                            overflow = TextOverflow.Ellipsis
                                         )
                                     }
 
@@ -315,7 +335,7 @@ fun DuplicatesScreen(
                     .padding(horizontal = 24.dp, vertical = 14.dp)
             ) {
                 Button(
-                    onClick = { showConfirmDialog = true },
+                    onClick = onDeleteSelected,
                     modifier = Modifier
                         .fillMaxWidth()
                         .height(54.dp),
@@ -338,32 +358,4 @@ fun DuplicatesScreen(
         }
     }
 
-    if (showConfirmDialog) {
-        AlertDialog(
-            onDismissRequest = { showConfirmDialog = false },
-            title = { Text("Delete duplicate copies?", fontWeight = FontWeight.Bold) },
-            text = {
-                Text(
-                    "You are deleting $totalSelectedCount duplicate copies to reclaim ${StorageMetrics.formatBytes(totalRemovableBytes)}. At least one copy will be safely preserved.",
-                    fontSize = 14.sp
-                )
-            },
-            confirmButton = {
-                Button(
-                    onClick = {
-                        onDeleteSelected()
-                        showConfirmDialog = false
-                    },
-                    colors = ButtonDefaults.buttonColors(containerColor = RoomyDelete)
-                ) {
-                    Text("Delete Copies", color = Color.White)
-                }
-            },
-            dismissButton = {
-                TextButton(onClick = { showConfirmDialog = false }) {
-                    Text("Cancel")
-                }
-            }
-        )
-    }
 }

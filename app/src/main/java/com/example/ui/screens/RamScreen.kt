@@ -196,7 +196,7 @@ fun RamScreen(
                             )
                             Spacer(modifier = Modifier.height(4.dp))
                             Text(
-                                text = "Modern Android systems manage active and cached memory automatically. RAM is purposefully filled with cached processes to launch your daily apps quickly without draining battery power.\n\nRoomy does not use artificial task-killer buttons or fake RAM boost claims, which can degrade system stability and battery life.",
+                                text = "Modern Android systems manage active and cached memory automatically. RAM is purposefully filled with cached processes to launch your daily apps quickly without draining battery power.\n\nCleanser does not use artificial task-killer buttons or fake RAM boost claims, which can degrade system stability and battery life.",
                                 fontSize = 12.sp,
                                 color = RoomyTextSecondary,
                                 lineHeight = 18.sp

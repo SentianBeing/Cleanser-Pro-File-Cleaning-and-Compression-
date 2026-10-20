@@ -51,6 +51,7 @@ import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 import com.example.model.MediaFileItem
 import com.example.model.StorageMetrics
+import com.example.ui.components.MediaThumbnail
 import com.example.ui.theme.RoomyBackground
 import com.example.ui.theme.RoomyCardBg
 import com.example.ui.theme.RoomyCompress
@@ -71,13 +72,14 @@ fun LargeFilesScreen(
     onCompress: (MediaFileItem) -> Unit,
     onDelete: (MediaFileItem) -> Unit,
     onBack: () -> Unit,
-    modifier: Modifier = Modifier
+    modifier: Modifier = Modifier,
+    onOpen: (List<MediaFileItem>, MediaFileItem) -> Unit = { _, _ -> }
 ) {
-    var itemPendingDelete by remember { mutableStateOf<MediaFileItem?>(null) }
-
-    val thresholdBytes = thresholdMb.toLong() * 1024L * 1024L
-    val largeFiles = mediaList.filter { it.sizeBytes >= thresholdBytes }.sortedByDescending { it.sizeBytes }
-    val totalSize = largeFiles.sumOf { it.sizeBytes }
+    val largeFiles = remember(mediaList, thresholdMb) {
+        val thresholdBytes = thresholdMb * 1_000_000L
+        mediaList.filter { it.sizeBytes >= thresholdBytes }.sortedByDescending { it.sizeBytes }
+    }
+    val totalSize = remember(largeFiles) { largeFiles.sumOf { it.sizeBytes } }
 
     Column(
         modifier = modifier
@@ -226,20 +228,13 @@ fun LargeFilesScreen(
                     ) {
                         Column {
                             Row(verticalAlignment = Alignment.CenterVertically) {
-                                Box(
+                                MediaThumbnail(
+                                    item = item,
                                     modifier = Modifier
-                                        .size(46.dp)
+                                        .size(56.dp)
                                         .clip(RoundedCornerShape(12.dp))
-                                        .background(RoomyCoralLight),
-                                    contentAlignment = Alignment.Center
-                                ) {
-                                    Icon(
-                                        imageVector = if (item.isVideo) Icons.Default.Videocam else Icons.Default.FolderZip,
-                                        contentDescription = null,
-                                        tint = RoomyCoral,
-                                        modifier = Modifier.size(22.dp)
-                                    )
-                                }
+                                        .clickable { onOpen(largeFiles, item) }
+                                )
 
                                 Spacer(modifier = Modifier.width(12.dp))
 
@@ -254,7 +249,7 @@ fun LargeFilesScreen(
                                     )
                                     Spacer(modifier = Modifier.height(2.dp))
                                     Text(
-                                        text = "${item.formattedSize} · Added ${item.formattedDate}",
+                                        text = "${item.formattedSize} · ${item.formattedDate}",
                                         fontSize = 12.sp,
                                         color = RoomyTextSecondary
                                     )
@@ -282,7 +277,7 @@ fun LargeFilesScreen(
                                 }
 
                                 OutlinedButton(
-                                    onClick = { itemPendingDelete = item },
+                                    onClick = { onDelete(item) },
                                     modifier = Modifier.weight(1f).height(38.dp),
                                     shape = RoundedCornerShape(10.dp)
                                 ) {
@@ -298,27 +293,4 @@ fun LargeFilesScreen(
         }
     }
 
-    itemPendingDelete?.let { item ->
-        AlertDialog(
-            onDismissRequest = { itemPendingDelete = null },
-            title = { Text("Delete large file?", fontWeight = FontWeight.Bold) },
-            text = { Text("Are you sure you want to permanently delete \"${item.name}\" (${item.formattedSize})?") },
-            confirmButton = {
-                Button(
-                    onClick = {
-                        onDelete(item)
-                        itemPendingDelete = null
-                    },
-                    colors = ButtonDefaults.buttonColors(containerColor = RoomyDelete)
-                ) {
-                    Text("Delete", color = Color.White)
-                }
-            },
-            dismissButton = {
-                TextButton(onClick = { itemPendingDelete = null }) {
-                    Text("Cancel")
-                }
-            }
-        )
-    }
 }

@@ -5,9 +5,14 @@ import androidx.room.Database
 import androidx.room.Room
 import androidx.room.RoomDatabase
 
-@Database(entities = [CleanHistoryEntity::class], version = 1, exportSchema = false)
+@Database(
+    entities = [CleanHistoryEntity::class, MediaFlagEntity::class, FileHashEntity::class],
+    version = 2,
+    exportSchema = false
+)
 abstract class AppDatabase : RoomDatabase() {
     abstract fun cleanHistoryDao(): CleanHistoryDao
+    abstract fun mediaDao(): MediaDao
 
     companion object {
         @Volatile
@@ -19,7 +24,7 @@ abstract class AppDatabase : RoomDatabase() {
                     context.applicationContext,
                     AppDatabase::class.java,
                     "pureclean_database"
-                ).fallbackToDestructiveMigration().build()
+                ).fallbackToDestructiveMigration(dropAllTables = true).build()
                 INSTANCE = instance
                 instance
             }

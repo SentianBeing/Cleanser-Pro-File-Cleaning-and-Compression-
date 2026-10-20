@@ -28,7 +28,11 @@ import androidx.compose.material.icons.automirrored.filled.ArrowBack
 import androidx.compose.material.icons.filled.CheckCircle
 import androidx.compose.material.icons.filled.Delete
 import androidx.compose.material.icons.filled.DeleteSweep
-import androidx.compose.material.icons.filled.OpenInNew
+import androidx.compose.material.icons.filled.Download
+import androidx.compose.material.icons.filled.Forum
+import androidx.compose.material.icons.filled.Screenshot
+import androidx.compose.material.icons.filled.Videocam
+import androidx.compose.material.icons.automirrored.filled.OpenInNew
 import androidx.compose.material.icons.filled.Security
 import androidx.compose.material3.Button
 import androidx.compose.material3.ButtonDefaults
@@ -50,6 +54,10 @@ import androidx.compose.ui.text.style.TextAlign
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 import com.example.model.JunkItem
+import com.example.model.MediaCollection
+import com.example.model.MediaFileItem
+import com.example.ui.components.CategoryTile
+import com.example.ui.theme.RoomyCoralLight
 import com.example.model.StorageMetrics
 import com.example.ui.theme.RoomyBackground
 import com.example.ui.theme.RoomyCardBg
@@ -67,7 +75,9 @@ fun JunkScreen(
     onToggleJunk: (String) -> Unit,
     onDeleteSelected: () -> Unit,
     onBack: () -> Unit,
-    modifier: Modifier = Modifier
+    modifier: Modifier = Modifier,
+    collections: Map<MediaCollection, List<MediaFileItem>> = emptyMap(),
+    onOpenCollection: (MediaCollection) -> Unit = {}
 ) {
     val context = LocalContext.current
     val selectedItems = junkItems.filter { it.isSelected }
@@ -147,14 +157,14 @@ fun JunkScreen(
 
                         Column {
                             Text(
-                                text = "Scoped Storage Protection",
+                                text = "What Cleanser can clean",
                                 fontSize = 14.sp,
                                 fontWeight = FontWeight.Bold,
                                 color = RoomyTextMain
                             )
                             Spacer(modifier = Modifier.height(2.dp))
                             Text(
-                                text = "Android prevents third-party apps from scraping other apps' private caches. Roomy safely targets its own temporary buffers and provides direct access to system storage.",
+                                text = "Android doesn't let apps clear other apps' caches. Cleanser finds clutter in your gallery and its own leftovers; for other apps' caches, use Android's storage settings below.",
                                 fontSize = 12.sp,
                                 color = RoomyTextSecondary,
                                 lineHeight = 16.sp
@@ -164,9 +174,38 @@ fun JunkScreen(
                 }
             }
 
+            // Folders that quietly fill up: each opens a grid to review and clean
             item {
                 Text(
-                    text = "ACCESSIBLE TEMPORARY OUTPUTS (${junkItems.size})",
+                    text = "CLUTTER TO REVIEW",
+                    fontSize = 11.sp,
+                    fontWeight = FontWeight.Bold,
+                    letterSpacing = 1.sp,
+                    color = RoomyTextSecondary
+                )
+            }
+            items(MediaCollection.entries, key = { it.name }) { collection ->
+                val files = collections[collection].orEmpty()
+                CategoryTile(
+                    title = collection.title,
+                    subtitle = if (files.isEmpty()) "Nothing found" else
+                        "${if (files.size == 1) "1 item" else "${files.size} items"} · ${StorageMetrics.formatBytes(files.sumOf { it.sizeBytes })} · ${collection.description}",
+                    icon = when (collection) {
+                        MediaCollection.SCREENSHOTS -> Icons.Default.Screenshot
+                        MediaCollection.SCREEN_RECORDINGS -> Icons.Default.Videocam
+                        MediaCollection.WHATSAPP, MediaCollection.TELEGRAM -> Icons.Default.Forum
+                        MediaCollection.DOWNLOADS -> Icons.Default.Download
+                    },
+                    iconTint = RoomyCoral,
+                    iconBgColor = RoomyCoralLight,
+                    onClick = { onOpenCollection(collection) },
+                    testTag = "collection_${collection.name.lowercase()}"
+                )
+            }
+
+            item {
+                Text(
+                    text = "APP LEFTOVERS (${junkItems.size})",
                     fontSize = 11.sp,
                     fontWeight = FontWeight.Bold,
                     letterSpacing = 1.sp,
@@ -190,14 +229,14 @@ fun JunkScreen(
                         )
                         Spacer(modifier = Modifier.height(8.dp))
                         Text(
-                            text = "No Residual Buffers Found",
+                            text = "No Leftover Files",
                             fontSize = 16.sp,
                             fontWeight = FontWeight.Bold,
                             color = RoomyTextMain
                         )
                         Spacer(modifier = Modifier.height(4.dp))
                         Text(
-                            text = "App caches and temp directories are clear.",
+                            text = "Cleanser has no temporary files to clean.",
                             fontSize = 12.sp,
                             color = RoomyTextSecondary
                         )
@@ -262,7 +301,7 @@ fun JunkScreen(
                         .height(50.dp),
                     shape = RoundedCornerShape(14.dp)
                 ) {
-                    Icon(Icons.Default.OpenInNew, contentDescription = null, modifier = Modifier.size(16.dp))
+                    Icon(Icons.AutoMirrored.Filled.OpenInNew, contentDescription = null, modifier = Modifier.size(16.dp))
                     Spacer(modifier = Modifier.width(8.dp))
                     Text("Manage System & App Storage in Android", fontSize = 13.sp)
                 }

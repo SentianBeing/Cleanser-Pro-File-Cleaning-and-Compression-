@@ -2,7 +2,7 @@ package com.example.ui.theme
 
 import androidx.compose.ui.graphics.Color
 
-// Roomy Color Tokens (PRD Specification)
+// Cleanser Color Tokens (PRD Specification)
 val RoomyBackground = Color(0xFFFFFFFF)        // Main background
 val RoomyCardBg = Color(0xFFF7F7F9)            // Subtle card background
 val RoomyTextMain = Color(0xFF171717)          // Main text

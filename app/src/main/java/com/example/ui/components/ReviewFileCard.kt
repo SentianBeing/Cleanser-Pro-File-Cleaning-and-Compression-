@@ -2,6 +2,7 @@ package com.example.ui.components
 
 import androidx.compose.foundation.background
 import androidx.compose.foundation.border
+import androidx.compose.foundation.clickable
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.Column
@@ -62,10 +63,9 @@ fun ReviewFileCard(
     onUnkeep: () -> Unit,
     onCompress: () -> Unit,
     onDelete: () -> Unit,
-    modifier: Modifier = Modifier
+    modifier: Modifier = Modifier,
+    onOpen: () -> Unit = {}
 ) {
-    val context = LocalContext.current
-
     Box(
         modifier = modifier
             .fillMaxWidth()
@@ -79,34 +79,15 @@ fun ReviewFileCard(
                 verticalAlignment = Alignment.CenterVertically,
                 modifier = Modifier.fillMaxWidth()
             ) {
-                // Bounded Thumbnail with fallback
-                Box(
+                // Fast system thumbnail; tap to open the full preview
+                MediaThumbnail(
+                    item = item,
                     modifier = Modifier
                         .size(64.dp)
                         .clip(RoundedCornerShape(12.dp))
-                        .background(Color.White)
-                        .border(1.dp, RoomyDivider, RoundedCornerShape(12.dp)),
-                    contentAlignment = Alignment.Center
-                ) {
-                    if (item.mimeType.startsWith("image/") || item.mimeType.startsWith("video/")) {
-                        AsyncImage(
-                            model = ImageRequest.Builder(context)
-                                .data(item.uri)
-                                .crossfade(true)
-                                .build(),
-                            contentDescription = item.name,
-                            contentScale = ContentScale.Crop,
-                            modifier = Modifier.fillMaxSize()
-                        )
-                    } else {
-                        Icon(
-                            imageVector = if (item.isVideo) Icons.Default.Videocam else Icons.Default.Image,
-                            contentDescription = null,
-                            tint = if (item.isVideo) RoomyCoral else RoomyLavender,
-                            modifier = Modifier.size(28.dp)
-                        )
-                    }
-                }
+                        .border(1.dp, RoomyDivider, RoundedCornerShape(12.dp))
+                        .clickable { onOpen() }
+                )
 
                 Spacer(modifier = Modifier.width(14.dp))
 

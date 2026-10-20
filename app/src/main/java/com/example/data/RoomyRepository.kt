@@ -1,15 +1,17 @@
 package com.example.data
 
 import android.app.ActivityManager
-import android.content.ContentUris
+import android.app.RecoverableSecurityException
+import android.app.usage.StorageStatsManager
+import android.content.ContentValues
 import android.content.Context
 import android.content.IntentSender
-import android.graphics.Bitmap
-import android.graphics.BitmapFactory
 import android.net.Uri
 import android.os.Build
+import android.os.Bundle
 import android.os.Environment
 import android.os.StatFs
+import android.os.storage.StorageManager
 import android.provider.MediaStore
 import com.example.model.CompressionJobResult
 import com.example.model.CompressionPreset
@@ -19,39 +21,50 @@ import com.example.model.MediaFileItem
 import com.example.model.RamStats
 import com.example.model.StorageMetrics
 import kotlinx.coroutines.Dispatchers
+import kotlinx.coroutines.flow.Flow
 import kotlinx.coroutines.withContext
 import java.io.File
-import java.io.FileOutputStream
-import java.security.MessageDigest
+
+/** What kind of system dialog a MediaStore request opens. */
+enum class MediaRequestKind { TRASH, DELETE, RESTORE }
+
+sealed interface DirectDeleteResult {
+    data object Deleted : DirectDeleteResult
+    data class NeedsConsent(val intentSender: IntentSender) : DirectDeleteResult
+    data object Failed : DirectDeleteResult
+}
 
 class RoomyRepository(private val context: Context) {
 
-    // Persistent in-memory set of kept (excluded) file IDs
-    private val keptFileIds = mutableSetOf<String>()
+    private val resolver = context.contentResolver
+    private val database = AppDatabase.getInstance(context)
+    private val mediaDao = database.mediaDao()
+    private val historyDao = database.cleanHistoryDao()
+    private val scanner = MediaScanner(context)
+    private val duplicateFinder = DuplicateFinder(context, mediaDao)
+    private val compressor = MediaCompressor(context)
 
-    // Additional media URIs explicitly added via Android Photo Picker
+    // Files added through the Android photo picker (read-only access, no permission needed)
     private val pickerMediaItems = mutableListOf<MediaFileItem>()
+
+    val totalBytesCleaned: Flow<Long?> = historyDao.getTotalBytesFreed()
 
     fun getStorageMetrics(): StorageMetrics {
         return try {
-            val dataDir = Environment.getDataDirectory()
-            val statFs = StatFs(dataDir.path)
-            val blockSize = statFs.blockSizeLong
-            val totalBlocks = statFs.blockCountLong
-            val availBlocks = statFs.availableBlocksLong
-
-            val totalStorageBytes = totalBlocks * blockSize
-            val freeStorageBytes = availBlocks * blockSize
-            val usedStorageBytes = (totalStorageBytes - freeStorageBytes).coerceAtLeast(0L)
-            val usedStoragePercent = if (totalStorageBytes > 0) {
-                ((usedStorageBytes.toDouble() / totalStorageBytes) * 100).toInt().coerceIn(0, 100)
-            } else 0
-
+            // StorageStatsManager reports the same totals as Android Settings (e.g. "128 GB")
+            val (total, free) = if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.O) {
+                val stats = context.getSystemService(StorageStatsManager::class.java)
+                stats.getTotalBytes(StorageManager.UUID_DEFAULT) to stats.getFreeBytes(StorageManager.UUID_DEFAULT)
+            } else {
+                val statFs = StatFs(Environment.getDataDirectory().path)
+                statFs.totalBytes to statFs.availableBytes
+            }
+            val used = (total - free).coerceAtLeast(0L)
             StorageMetrics(
-                totalStorageBytes = totalStorageBytes,
-                freeStorageBytes = freeStorageBytes,
-                usedStorageBytes = usedStorageBytes,
-                usedStoragePercent = usedStoragePercent
+                totalStorageBytes = total,
+                freeStorageBytes = free,
+                usedStorageBytes = used,
+                usedStoragePercent = if (total > 0) ((used.toDouble() / total) * 100).toInt().coerceIn(0, 100) else 0
             )
         } catch (e: Exception) {
             StorageMetrics()
@@ -83,171 +96,51 @@ class RoomyRepository(private val context: Context) {
     }
 
     // ------------------------------------------------------------------------
-    // Real Android MediaStore Queries via ContentResolver (Zero Dummy Data)
+    // Saved choices (Keep, compressed copies)
     // ------------------------------------------------------------------------
 
-    suspend fun scanRealMedia(
-        onProgress: (Float, String) -> Unit
-    ): List<MediaFileItem> = withContext(Dispatchers.IO) {
-        onProgress(0.1f, "Querying Android MediaStore for photos…")
-        val items = mutableListOf<MediaFileItem>()
-
-        // 1. Query Real Device Photos
-        try {
-            val imageProjection = arrayOf(
-                MediaStore.Images.Media._ID,
-                MediaStore.Images.Media.DISPLAY_NAME,
-                MediaStore.Images.Media.SIZE,
-                MediaStore.Images.Media.DATE_MODIFIED,
-                MediaStore.Images.Media.MIME_TYPE,
-                MediaStore.Images.Media.WIDTH,
-                MediaStore.Images.Media.HEIGHT
-            )
-
-            val sortOrder = "${MediaStore.Images.Media.DATE_MODIFIED} DESC"
-
-            context.contentResolver.query(
-                MediaStore.Images.Media.EXTERNAL_CONTENT_URI,
-                imageProjection,
-                null,
-                null,
-                sortOrder
-            )?.use { cursor ->
-                val idCol = cursor.getColumnIndex(MediaStore.Images.Media._ID)
-                val nameCol = cursor.getColumnIndex(MediaStore.Images.Media.DISPLAY_NAME)
-                val sizeCol = cursor.getColumnIndex(MediaStore.Images.Media.SIZE)
-                val dateCol = cursor.getColumnIndex(MediaStore.Images.Media.DATE_MODIFIED)
-                val mimeCol = cursor.getColumnIndex(MediaStore.Images.Media.MIME_TYPE)
-                val widthCol = cursor.getColumnIndex(MediaStore.Images.Media.WIDTH)
-                val heightCol = cursor.getColumnIndex(MediaStore.Images.Media.HEIGHT)
-
-                if (idCol != -1) {
-                    while (cursor.moveToNext()) {
-                        val id = cursor.getLong(idCol)
-                        val name = if (nameCol != -1) cursor.getString(nameCol) ?: "Image_$id" else "Image_$id"
-                        val size = if (sizeCol != -1) cursor.getLong(sizeCol) else 0L
-                        val dateModified = if (dateCol != -1) cursor.getLong(dateCol) * 1000L else System.currentTimeMillis()
-                        val mime = if (mimeCol != -1) cursor.getString(mimeCol) ?: "image/jpeg" else "image/jpeg"
-                        val w = if (widthCol != -1) cursor.getInt(widthCol) else 0
-                        val h = if (heightCol != -1) cursor.getInt(heightCol) else 0
-
-                        val uri = ContentUris.withAppendedId(MediaStore.Images.Media.EXTERNAL_CONTENT_URI, id)
-                        val dimStr = if (w > 0 && h > 0) "$w x $h" else ""
-
-                        items.add(
-                            MediaFileItem(
-                                id = uri.toString(),
-                                uri = uri,
-                                name = name,
-                                path = uri.toString(),
-                                sizeBytes = size,
-                                isVideo = false,
-                                mimeType = mime,
-                                dateAdded = dateModified,
-                                dimensions = dimStr,
-                                durationSeconds = 0,
-                                isExcluded = keptFileIds.contains(uri.toString())
-                            )
-                        )
-                    }
-                }
-            }
-        } catch (_: SecurityException) {
-            // Permission not granted or partial
-        } catch (_: Exception) {}
-
-        onProgress(0.5f, "Querying Android MediaStore for videos…")
-
-        // 2. Query Real Device Videos
-        try {
-            val videoProjection = arrayOf(
-                MediaStore.Video.Media._ID,
-                MediaStore.Video.Media.DISPLAY_NAME,
-                MediaStore.Video.Media.SIZE,
-                MediaStore.Video.Media.DATE_MODIFIED,
-                MediaStore.Video.Media.MIME_TYPE,
-                MediaStore.Video.Media.DURATION,
-                MediaStore.Video.Media.WIDTH,
-                MediaStore.Video.Media.HEIGHT
-            )
-
-            context.contentResolver.query(
-                MediaStore.Video.Media.EXTERNAL_CONTENT_URI,
-                videoProjection,
-                null,
-                null,
-                "${MediaStore.Video.Media.DATE_MODIFIED} DESC"
-            )?.use { cursor ->
-                val idCol = cursor.getColumnIndex(MediaStore.Video.Media._ID)
-                val nameCol = cursor.getColumnIndex(MediaStore.Video.Media.DISPLAY_NAME)
-                val sizeCol = cursor.getColumnIndex(MediaStore.Video.Media.SIZE)
-                val dateCol = cursor.getColumnIndex(MediaStore.Video.Media.DATE_MODIFIED)
-                val mimeCol = cursor.getColumnIndex(MediaStore.Video.Media.MIME_TYPE)
-                val durCol = cursor.getColumnIndex(MediaStore.Video.Media.DURATION)
-                val widthCol = cursor.getColumnIndex(MediaStore.Video.Media.WIDTH)
-                val heightCol = cursor.getColumnIndex(MediaStore.Video.Media.HEIGHT)
-
-                if (idCol != -1) {
-                    while (cursor.moveToNext()) {
-                        val id = cursor.getLong(idCol)
-                        val name = if (nameCol != -1) cursor.getString(nameCol) ?: "Video_$id" else "Video_$id"
-                        val size = if (sizeCol != -1) cursor.getLong(sizeCol) else 0L
-                        val dateModified = if (dateCol != -1) cursor.getLong(dateCol) * 1000L else System.currentTimeMillis()
-                        val mime = if (mimeCol != -1) cursor.getString(mimeCol) ?: "video/mp4" else "video/mp4"
-                        val durationMs = if (durCol != -1) cursor.getLong(durCol) else 0L
-                        val w = if (widthCol != -1) cursor.getInt(widthCol) else 0
-                        val h = if (heightCol != -1) cursor.getInt(heightCol) else 0
-
-                        val uri = ContentUris.withAppendedId(MediaStore.Video.Media.EXTERNAL_CONTENT_URI, id)
-                        val dimStr = if (w > 0 && h > 0) "$w x $h" else ""
-
-                        items.add(
-                            MediaFileItem(
-                                id = uri.toString(),
-                                uri = uri,
-                                name = name,
-                                path = uri.toString(),
-                                sizeBytes = size,
-                                isVideo = true,
-                                mimeType = mime,
-                                dateAdded = dateModified,
-                                dimensions = dimStr,
-                                durationSeconds = (durationMs / 1000).toInt(),
-                                isExcluded = keptFileIds.contains(uri.toString())
-                            )
-                        )
-                    }
-                }
-            }
-        } catch (_: SecurityException) {
-            // Permission not granted or partial
-        } catch (_: Exception) {}
-
-        // 3. Append any Photo Picker selected items (fallback / zero-permission selections)
-        synchronized(pickerMediaItems) {
-            val existingIds = items.map { it.id }.toSet()
-            pickerMediaItems.forEach { pickerItem ->
-                if (!existingIds.contains(pickerItem.id)) {
-                    items.add(pickerItem.copy(isExcluded = keptFileIds.contains(pickerItem.id)))
-                }
-            }
-        }
-
-        onProgress(1.0f, "Scan finalized (${items.size} files found)")
-        items.sortedByDescending { it.sizeBytes }
+    suspend fun loadFlags(): Pair<Set<String>, Set<String>> = withContext(Dispatchers.IO) {
+        val flags = mediaDao.getFlags()
+        flags.filter { it.kept }.mapTo(HashSet()) { it.id } to flags.filter { it.compressedCopy }.mapTo(HashSet()) { it.id }
     }
 
-    /**
-     * Adds files picked via Android Photo Picker to the active scan inventory
-     */
+    suspend fun setKept(id: String, kept: Boolean) = withContext(Dispatchers.IO) {
+        val current = mediaDao.getFlag(id) ?: MediaFlagEntity(id)
+        mediaDao.upsertFlags(listOf(current.copy(kept = kept)))
+    }
+
+    suspend fun markCompressedCopies(ids: List<String>) = withContext(Dispatchers.IO) {
+        if (ids.isNotEmpty()) mediaDao.upsertFlags(ids.map { MediaFlagEntity(it, compressedCopy = true) })
+    }
+
+    suspend fun forgetFiles(ids: List<String>) = withContext(Dispatchers.IO) {
+        ids.chunked(500).forEach {
+            mediaDao.deleteFlags(it)
+            mediaDao.deleteHashes(it)
+        }
+    }
+
+    // ------------------------------------------------------------------------
+    // Scanning
+    // ------------------------------------------------------------------------
+
+    suspend fun scanMedia(keptIds: Set<String>, compressedCopyIds: Set<String>): List<MediaFileItem> =
+        withContext(Dispatchers.IO) {
+            val items = scanner.queryAll(keptIds, compressedCopyIds).toMutableList()
+            val existing = items.mapTo(HashSet()) { it.id }
+            synchronized(pickerMediaItems) {
+                pickerMediaItems.filter { it.id !in existing }.forEach { items.add(it.copy(isExcluded = it.id in keptIds)) }
+            }
+            items.sortedByDescending { it.sizeBytes }
+        }
+
     fun addPickerUris(uris: List<Uri>) {
         uris.forEach { uri ->
             try {
                 var name = "Picked_${System.currentTimeMillis()}"
                 var size = 0L
-                var mime = context.contentResolver.getType(uri) ?: "image/jpeg"
-
-                context.contentResolver.query(uri, null, null, null, null)?.use { cursor ->
+                val mime = resolver.getType(uri) ?: "image/jpeg"
+                resolver.query(uri, null, null, null, null)?.use { cursor ->
                     val nameIdx = cursor.getColumnIndex(MediaStore.MediaColumns.DISPLAY_NAME)
                     val sizeIdx = cursor.getColumnIndex(MediaStore.MediaColumns.SIZE)
                     if (cursor.moveToFirst()) {
@@ -255,289 +148,140 @@ class RoomyRepository(private val context: Context) {
                         if (sizeIdx != -1) size = cursor.getLong(sizeIdx)
                     }
                 }
-
-                val isVid = mime.startsWith("video/")
                 val item = MediaFileItem(
                     id = uri.toString(),
                     uri = uri,
                     name = name,
-                    path = uri.toString(),
+                    path = name,
                     sizeBytes = size,
-                    isVideo = isVid,
+                    isVideo = mime.startsWith("video/"),
                     mimeType = mime,
-                    dateAdded = System.currentTimeMillis()
+                    dateAdded = System.currentTimeMillis(),
+                    folder = "Picked files/",
+                    isPicked = true
                 )
-
                 synchronized(pickerMediaItems) {
-                    pickerMediaItems.removeAll { it.id == uri.toString() }
+                    pickerMediaItems.removeAll { it.id == item.id }
                     pickerMediaItems.add(item)
                 }
             } catch (_: Exception) {}
         }
     }
 
+    /** Once full gallery access is granted, picked files would show up twice (picker + gallery), so drop them. */
+    fun clearPickedItems() = synchronized(pickerMediaItems) { pickerMediaItems.clear() }
+
+    suspend fun findDuplicates(media: List<MediaFileItem>, onProgress: (String) -> Unit): List<DuplicateGroup> =
+        duplicateFinder.find(media, onProgress)
+
     // ------------------------------------------------------------------------
-    // Exact Duplicate Detection (Size Grouping + Streamed SHA-256)
+    // Deleting (Android's own confirmation dialog on Android 11+)
     // ------------------------------------------------------------------------
 
-    suspend fun detectExactDuplicates(
-        mediaList: List<MediaFileItem>,
-        onProgress: (Float, String) -> Unit
-    ): List<DuplicateGroup> = withContext(Dispatchers.IO) {
-        onProgress(0.2f, "Grouping candidates by exact byte size…")
-
-        // Only compare files that have a valid size (> 0)
-        val sizeCandidates = mediaList.filter { it.sizeBytes > 0 }.groupBy { it.sizeBytes }.filter { it.value.size > 1 }
-        val resultGroups = mutableListOf<DuplicateGroup>()
-
-        val candidateCount = sizeCandidates.size.coerceAtLeast(1)
-        var processed = 0
-
-        sizeCandidates.forEach { (size, candidates) ->
-            processed++
-            onProgress(0.2f + (processed.toFloat() / candidateCount) * 0.7f, "Computing streamed SHA-256…")
-
-            val hashMap = mutableMapOf<String, MutableList<MediaFileItem>>()
-            for (item in candidates) {
-                val hash = computeSha256(item.uri)
-                if (hash.isNotEmpty()) {
-                    val list = hashMap.getOrPut(hash) { mutableListOf() }
-                    list.add(item.copy(sha256 = hash))
-                }
-            }
-
-            hashMap.filter { it.value.size > 1 }.forEach { (hash, exactMatches) ->
-                val sorted = exactMatches.sortedBy { it.dateAdded }
-                val keeper = sorted.first()
-                val updatedFiles = sorted.map { item ->
-                    item.copy(isSelectedForDelete = false)
-                }
-
-                resultGroups.add(
-                    DuplicateGroup(
-                        checksum = hash,
-                        byteSize = size,
-                        isVideo = exactMatches.first().isVideo,
-                        files = updatedFiles,
-                        recommendedKeeperId = keeper.id
-                    )
-                )
-            }
-        }
-
-        onProgress(1.0f, "Duplicate detection complete")
-        resultGroups
-    }
-
-    private fun computeSha256(uri: Uri): String {
+    fun createMediaRequest(uris: List<Uri>, kind: MediaRequestKind): IntentSender? {
+        if (Build.VERSION.SDK_INT < Build.VERSION_CODES.R || uris.isEmpty()) return null
         return try {
-            val digest = MessageDigest.getInstance("SHA-256")
-            context.contentResolver.openInputStream(uri)?.use { stream ->
-                val buffer = ByteArray(8192)
-                var bytesRead: Int
-                while (stream.read(buffer).also { bytesRead = it } != -1) {
-                    digest.update(buffer, 0, bytesRead)
-                }
-            } ?: return ""
-            digest.digest().joinToString("") { "%02x".format(it) }
+            when (kind) {
+                MediaRequestKind.TRASH -> MediaStore.createTrashRequest(resolver, uris, true)
+                MediaRequestKind.RESTORE -> MediaStore.createTrashRequest(resolver, uris, false)
+                MediaRequestKind.DELETE -> MediaStore.createDeleteRequest(resolver, uris)
+            }.intentSender
         } catch (_: Exception) {
-            ""
+            null
         }
     }
 
-    // ------------------------------------------------------------------------
-    // Review-First Actions: Keep & Deletion
-    // ------------------------------------------------------------------------
-
-    fun keepItem(id: String) {
-        keptFileIds.add(id)
-    }
-
-    fun unkeepItem(id: String) {
-        keptFileIds.remove(id)
-    }
-
-    /**
-     * Builds official Android MediaStore system deletion consent request on API 30+
-     * Returns an IntentSender for the system dialog ("Allow Roomy to delete X photos?")
-     */
-    fun createSystemDeleteIntent(uris: List<Uri>): IntentSender? {
-        if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.R) {
-            try {
-                val deleteRequest = MediaStore.createDeleteRequest(context.contentResolver, uris)
-                return deleteRequest.intentSender
-            } catch (_: Exception) {}
-        }
-        return null
-    }
-
-    /**
-     * Deletes items directly where allowed (app-owned files or granted URIs)
-     */
-    suspend fun deleteDirect(uris: List<Uri>): Pair<Int, Long> = withContext(Dispatchers.IO) {
-        var count = 0
-        var bytes = 0L
-
-        uris.forEach { uri ->
-            try {
-                if (uri.scheme == "file") {
-                    val f = File(uri.path ?: "")
-                    if (f.exists()) {
-                        val len = f.length()
-                        if (f.delete()) {
-                            count++
-                            bytes += len
-                        }
-                    }
-                } else {
-                    val deleted = context.contentResolver.delete(uri, null, null)
-                    if (deleted > 0) count++
-                }
-            } catch (_: Exception) {}
-        }
-
-        synchronized(pickerMediaItems) {
-            val uriStrings = uris.map { it.toString() }.toSet()
-            pickerMediaItems.removeAll { uriStrings.contains(it.id) }
-        }
-
-        Pair(count, bytes)
-    }
-
-    // ------------------------------------------------------------------------
-    // Real Local Media Compression (CPU & GPU)
-    // ------------------------------------------------------------------------
-
-    suspend fun compressMediaItem(
-        item: MediaFileItem,
-        preset: CompressionPreset,
-        onProgress: (Float, String) -> Unit
-    ): CompressionJobResult = withContext(Dispatchers.IO) {
-        val originalSize = item.sizeBytes
-        val outDir = File(context.filesDir, "roomy_compressed")
-        if (!outDir.exists()) outDir.mkdirs()
-
-        onProgress(0.2f, "Reading source media via ContentResolver…")
-
-        val isPng = item.mimeType == "image/png" || item.name.lowercase().endsWith(".png")
-
+    /** Android 10 and older: delete directly, or get the consent dialog Android 10 asks for. */
+    suspend fun deleteDirect(uri: Uri): DirectDeleteResult = withContext(Dispatchers.IO) {
         try {
-            // First decode bounds
-            val boundsOpts = BitmapFactory.Options().apply { inJustDecodeBounds = true }
-            context.contentResolver.openInputStream(item.uri)?.use { input ->
-                BitmapFactory.decodeStream(input, null, boundsOpts)
+            if (resolver.delete(uri, null, null) > 0) DirectDeleteResult.Deleted else DirectDeleteResult.Failed
+        } catch (e: SecurityException) {
+            if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.Q && e is RecoverableSecurityException) {
+                DirectDeleteResult.NeedsConsent(e.userAction.actionIntent.intentSender)
+            } else {
+                DirectDeleteResult.Failed
             }
+        } catch (_: Exception) {
+            DirectDeleteResult.Failed
+        }
+    }
 
-            var sampleSize = 1
-            if (preset == CompressionPreset.BALANCED) {
-                val maxDim = 1920
-                if (boundsOpts.outHeight > maxDim || boundsOpts.outWidth > maxDim) {
-                    val halfH = boundsOpts.outHeight / 2
-                    val halfW = boundsOpts.outWidth / 2
-                    while (halfH / sampleSize >= maxDim && halfW / sampleSize >= maxDim) {
-                        sampleSize *= 2
-                    }
-                }
-            }
-
-            val decodeOpts = BitmapFactory.Options().apply {
-                inSampleSize = sampleSize
-                inPreferredConfig = Bitmap.Config.ARGB_8888
-            }
-
-            onProgress(0.5f, "Decoding bitmap frames…")
-            val bitmap = context.contentResolver.openInputStream(item.uri)?.use { input ->
-                BitmapFactory.decodeStream(input, null, decodeOpts)
-            }
-
-            if (bitmap == null) {
-                return@withContext CompressionJobResult(
-                    sourceName = item.name,
-                    originalSizeBytes = originalSize,
-                    compressedSizeBytes = originalSize,
-                    savedBytes = 0L,
-                    reductionPercent = 0,
-                    isUsefulReduction = false,
-                    outputPath = "",
-                    message = "Could not decode source bitmap stream"
-                )
-            }
-
-            onProgress(0.8f, "Encoding hardware output with ${preset.label}…")
-            val ext = if (isPng) ".png" else ".jpg"
-            val destFile = File(outDir, "CMP_${System.currentTimeMillis()}_${item.name.substringBeforeLast('.')}$ext")
-
-            FileOutputStream(destFile).use { out ->
-                if (isPng) {
-                    bitmap.compress(Bitmap.CompressFormat.PNG, 100, out)
+    /** Returns the items that no longer exist in the gallery (deleted or moved to trash). */
+    suspend fun filterGone(items: List<MediaFileItem>): List<MediaFileItem> = withContext(Dispatchers.IO) {
+        items.filter { item ->
+            try {
+                if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.R) {
+                    // Looking a file up by ID still returns it after it's trashed, so read the flag itself
+                    val args = Bundle().apply { putInt(MediaStore.QUERY_ARG_MATCH_TRASHED, MediaStore.MATCH_INCLUDE) }
+                    resolver.query(item.uri, arrayOf(MediaStore.MediaColumns._ID, MediaStore.MediaColumns.IS_TRASHED), args, null)
+                        ?.use { c -> !c.moveToFirst() || c.getInt(1) == 1 } ?: true
                 } else {
-                    bitmap.compress(Bitmap.CompressFormat.JPEG, preset.quality, out)
+                    resolver.query(item.uri, arrayOf(MediaStore.MediaColumns._ID), null, null, null)
+                        ?.use { it.count == 0 } ?: true
                 }
+            } catch (_: Exception) {
+                true
             }
-            bitmap.recycle()
+        }
+    }
 
-            val compressedSize = destFile.length()
-            val saved = (originalSize - compressedSize).coerceAtLeast(0L)
-            val percent = if (originalSize > 0) ((saved.toDouble() / originalSize) * 100).toInt() else 0
-            val isUseful = saved > 1024 * 10 // At least 10KB reduction
+    suspend fun recordCleanup(bytes: Long, count: Int, summary: String) = withContext(Dispatchers.IO) {
+        if (count > 0) historyDao.insert(CleanHistoryEntity(bytesFreed = bytes, itemsRemoved = count, categorySummary = summary))
+    }
 
-            if (!isUseful) {
-                destFile.delete() // Clean temporary output if no reduction
+    // ------------------------------------------------------------------------
+    // Compression
+    // ------------------------------------------------------------------------
+
+    suspend fun compress(item: MediaFileItem, preset: CompressionPreset, onProgress: (Float) -> Unit): CompressionJobResult =
+        compressor.compress(item, preset, onProgress)
+
+    /** After the originals are gone, give the copies the original file names ("IMG_1.jpg" not "IMG_1 (1).jpg"). */
+    suspend fun renameCopiesToOriginalNames(results: List<CompressionJobResult>) = withContext(Dispatchers.IO) {
+        if (Build.VERSION.SDK_INT < Build.VERSION_CODES.Q) return@withContext
+        results.forEach { result ->
+            val uri = result.outputUri ?: return@forEach
+            val ext = when {
+                result.source.isVideo -> "mp4"
+                result.source.mimeType == "image/png" || result.source.mimeType == "image/webp" -> "webp"
+                else -> "jpg"
             }
-
-            CompressionJobResult(
-                sourceName = item.name,
-                originalSizeBytes = originalSize,
-                compressedSizeBytes = if (isUseful) compressedSize else originalSize,
-                savedBytes = saved,
-                reductionPercent = percent,
-                isUsefulReduction = isUseful,
-                outputPath = if (isUseful) destFile.absolutePath else "",
-                message = if (isUseful) "Reduced by $percent% on device" else "No useful reduction"
-            )
-        } catch (e: Exception) {
-            CompressionJobResult(
-                sourceName = item.name,
-                originalSizeBytes = originalSize,
-                compressedSizeBytes = originalSize,
-                savedBytes = 0L,
-                reductionPercent = 0,
-                isUsefulReduction = false,
-                outputPath = "",
-                message = "Encoding failed: ${e.localizedMessage ?: "Unknown error"}"
-            )
+            val wanted = "${result.source.name.substringBeforeLast('.')}.$ext"
+            try {
+                resolver.update(uri, ContentValues().apply { put(MediaStore.MediaColumns.DISPLAY_NAME, wanted) }, null, null)
+            } catch (_: Exception) {}
         }
     }
 
     // ------------------------------------------------------------------------
-    // Real App-Owned Cache & Temporary Outputs
+    // Junk: leftovers this app can safely remove
     // ------------------------------------------------------------------------
 
-    suspend fun scanJunkItems(): List<JunkItem> = withContext(Dispatchers.IO) {
+    suspend fun scanJunkItems(includeActiveTempFiles: Boolean): List<JunkItem> = withContext(Dispatchers.IO) {
         val items = mutableListOf<JunkItem>()
+        val staleBefore = System.currentTimeMillis() - 10 * 60 * 1000L
 
-        val cacheDirs = listOfNotNull(context.cacheDir, context.externalCacheDir)
-        cacheDirs.forEach { dir ->
-            if (dir.exists()) {
-                dir.walkTopDown().filter { it.isFile }.forEach { f ->
-                    val n = f.name.lowercase()
-                    if (n.endsWith(".tmp") || n.endsWith(".log") || n.endsWith(".bak") || n.startsWith("cmp_")) {
-                        items.add(
-                            JunkItem(
-                                id = f.absolutePath,
-                                title = f.name,
-                                path = f.absolutePath,
-                                sizeBytes = f.length(),
-                                reason = "App temporary buffer or encoding staging cache",
-                                isSelected = false
-                            )
-                        )
-                    }
-                }
+        // Temp files from compressions that were interrupted (e.g. the app was closed mid-way)
+        File(context.cacheDir, MediaCompressor.TEMP_DIR_NAME).listFiles()?.forEach { f ->
+            if (f.isFile && (includeActiveTempFiles || f.lastModified() < staleBefore)) {
+                items += JunkItem(f.absolutePath, f.name, f.absolutePath, f.length(), "Leftover from an interrupted compression")
             }
         }
 
-        items
+        // Copies saved privately by earlier versions of Cleanser (never visible in the gallery)
+        File(context.filesDir, "roomy_compressed").walkTopDown().filter { it.isFile }.forEach { f ->
+            items += JunkItem(f.absolutePath, f.name, f.absolutePath, f.length(), "Hidden copy from an older version of Cleanser")
+        }
+
+        listOfNotNull(context.cacheDir, context.externalCacheDir).forEach { dir ->
+            dir.walkTopDown().filter { it.isFile }.forEach { f ->
+                val n = f.name.lowercase()
+                if (n.endsWith(".tmp") || n.endsWith(".log") || n.endsWith(".bak")) {
+                    items += JunkItem(f.absolutePath, f.name, f.absolutePath, f.length(), "App temporary file")
+                }
+            }
+        }
+        items.distinctBy { it.id }
     }
 
     suspend fun deleteJunk(items: List<JunkItem>): Long = withContext(Dispatchers.IO) {

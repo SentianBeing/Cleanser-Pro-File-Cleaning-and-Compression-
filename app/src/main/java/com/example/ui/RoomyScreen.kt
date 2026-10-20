@@ -9,5 +9,7 @@ enum class RoomyScreen {
     DUPLICATES,
     BULK_COMPRESS,
     JUNK,
-    RAM
+    RAM,
+    PREVIEW,
+    COLLECTION
 }
